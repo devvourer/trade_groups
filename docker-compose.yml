@@ -1,0 +1,96 @@
+version: "3.9"
+
+services:
+  db:
+    image: postgres:alpine
+    environment:
+      - POSTGRES_DB=${DB_NAME}
+      - POSTGRES_USER=${DB_USER}
+      - POSTGRES_PASSWORD=${DB_PASS}
+    ports:
+      - "5432:5432"
+    volumes:
+      - db:/var/lib/postgresql/data
+
+  migration:
+    build: .
+    command: python manage.py migrate
+    env_file:
+      - .env
+    volumes:
+      - .:/app
+    depends_on:
+      - db
+
+  server:
+    build: .
+    command: bash -c "
+      python manage.py migrate
+      && gunicorn sky_invest_trading.wsgi:application --bind 0.0.0.0:8000
+      "
+    restart: always
+    expose:
+      - 8000
+    env_file:
+      - .env
+    volumes:
+      - .:/app
+      - static_data:/staticfiles
+      - media_data:/media
+    depends_on:
+      - db
+      - migration
+
+  rabbitmq:
+    image: rabbitmq:alpine
+    restart: always
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+
+  celery:
+    build:
+      context: .
+    command: celery -A sky_invest_trading worker --loglevel=WARNING -l INFO
+    restart: always
+    env_file:
+      - .env
+    volumes:
+      - ./sky_invest_trading:/app
+    depends_on:
+      - rabbitmq
+      - server
+
+  bot:
+    build:
+      context: .
+
+    command: bash -c "python manage.py telegram_bot"
+    restart: always
+    env_file:
+      - .env
+#
+#  frontend:
+#    build: ./frontend/
+#    volumes:
+#      - frontend_data:/app/build
+#    env_file:
+#      - .env
+
+  nginx:
+    image: nginx:alpine
+    volumes:
+      - ./data/nginx/dev.conf:/etc/nginx/conf.d/default.conf
+      - static_data:/var/www/server/staticfiles
+      - media_data:/var/www/server/media
+      - ./frontend/build:/var/www/frontend
+    ports:
+      - "80:80"
+    depends_on:
+      - server
+
+volumes:
+  db:
+  static_data:
+  media_data:
+  frontend_data:
